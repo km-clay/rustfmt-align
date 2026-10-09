@@ -103,6 +103,37 @@ impl<T> RewriteErrorExt<T> for Option<T> {
     }
 }
 
+/// Widths of a `let`'s left hand side, measured without alignment padding.
+#[derive(Clone, Copy)]
+pub(crate) struct LetLhs {
+    pub(crate) pat_width: usize,
+    /// `None` when the binding carries no type annotation.
+    pub(crate) ty_width: Option<usize>,
+    pub(crate) is_mut: bool,
+}
+
+/// The columns a run of `let` statements is being padded into.
+#[derive(Clone, Copy)]
+pub(crate) struct LetAlignPlan {
+    pub(crate) mut_slot: usize,
+    /// Column the colons sit at, counting from the end of `let `.
+    pub(crate) pat_target: usize,
+    /// Width of the type column, or `None` to leave the colons unaligned.
+    pub(crate) ty_target: Option<usize>,
+    /// Width of the whole left hand side, up to but not including ` =`.
+    pub(crate) lhs_target: usize,
+}
+
+/// What a `let` statement should do about column alignment. Read once and reset to `Off` by
+/// `ast::Local`, so a nested `let` inside an initializer never inherits its parent's plan.
+#[derive(Clone, Copy)]
+pub(crate) enum LetAlignMode {
+    Off,
+    /// Report this `let`'s unpadded left hand side back through `RewriteContext::let_lhs`.
+    Measure,
+    Apply(LetAlignPlan),
+}
+
 #[derive(Clone)]
 pub(crate) struct RewriteContext<'a> {
     pub(crate) psess: &'a ParseSess,
@@ -125,6 +156,8 @@ pub(crate) struct RewriteContext<'a> {
     pub(crate) report: FormatReport,
     pub(crate) skip_context: SkipContext,
     pub(crate) skipped_range: Rc<RefCell<Vec<(usize, usize)>>>,
+    pub(crate) let_align: Cell<LetAlignMode>,
+    pub(crate) let_lhs: Cell<Option<LetLhs>>,
 }
 
 pub(crate) struct InsideMacroGuard {

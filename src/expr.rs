@@ -1988,11 +1988,16 @@ pub(crate) fn rewrite_field(
     if field.is_shorthand {
         Ok(attrs_str + name)
     } else {
-        let mut separator = String::from(struct_lit_field_separator(context.config));
-        for _ in 0..prefix_max_width.saturating_sub(name.len()) {
-            separator.push(' ');
+        let pad = prefix_max_width.saturating_sub(unicode_str_width(name));
+        let mut separator = String::new();
+        if context.config.align_before_colon() {
+            separator.push_str(&" ".repeat(pad));
+            separator.push_str(struct_lit_field_separator(context.config));
+        } else {
+            separator.push_str(struct_lit_field_separator(context.config));
+            separator.push_str(&" ".repeat(pad));
         }
-        let overhead = name.len() + separator.len();
+        let overhead = unicode_str_width(name) + separator.len();
         let expr_shape = shape.offset_left(overhead, field.span)?;
         let expr = field.expr.rewrite_result(context, expr_shape);
         let is_lit = matches!(field.expr.kind, ast::ExprKind::Lit(_));

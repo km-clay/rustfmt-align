@@ -17,6 +17,41 @@ To enable unstable options, set `unstable_features = true` in `rustfmt.toml` or 
 
 Below you find a detailed visual guide on all the supported configuration options of rustfmt:
 
+## `align_before_colon`
+
+Place the padding that aligns struct fields and struct literal fields before the colon rather than
+after it, so that the colons themselves form a column.
+
+This has no effect on its own. It changes where the padding goes once alignment has been turned on
+by [`struct_field_align_threshold`](#struct_field_align_threshold) or
+[`let_align_threshold`](#let_align_threshold).
+
+- **Default value**: `false`
+- **Possible values**: `true`, `false`
+- **Stable**: No
+
+#### `false` (default):
+
+```rust
+struct Lorem {
+    ipsum: u32,
+    dolor: u32,
+    sit_amet: u32,
+}
+```
+
+With `struct_field_align_threshold = 20` and `align_before_colon = true`:
+
+```rust
+#![rustfmt::skip]
+
+struct Lorem {
+    ipsum   : u32,
+    dolor   : u32,
+    sit_amet: u32,
+}
+```
+
 ## `array_width`
 
 Maximum width of an array literal before falling back to vertical formatting.
@@ -1737,6 +1772,109 @@ use core::slice;
 #### `50`:
 ```rust
 #[cfg(feature = "alloc")] use core::slice;
+```
+
+## `let_align_threshold`
+
+The maximum diff of width between the left hand sides of consecutive `let` bindings to be aligned
+with each other. `mut` is given a column of its own, so which bindings are mutable can be read off
+the left edge, and type annotations are given another, so that the colons and the `=` each line up.
+[`align_before_colon`](#align_before_colon) decides which side of the colon its padding goes.
+
+The type column is measured over the annotated bindings in a run only, and is dropped when their
+widths differ by more than the threshold, leaving the colons against their patterns and only the
+`=` aligned. An unannotated binding holds the colon and type columns open so that every `=` in the
+run still lands together.
+
+Only runs of `let` statements are aligned, and any other statement ends the run; a blank line and a
+comment do not. A binding with no initializer, a `let` ... `else`, a `super let`, one carrying
+attributes and one that needs more than one line are each left out of the table and end the run. If
+the padding would push a binding onto a second line, the run is left unaligned.
+
+Padding can carry a binding's trailing comment past [`max_width`](#max_width), which rustfmt does
+not enforce for comments in any case.
+
+- **Default value**: 0
+- **Possible values**: any non-negative integer
+- **Stable**: No
+
+#### `0` (default):
+
+```rust
+fn main() {
+    let lorem = Lorem::new();
+    let mut ipsum = 0;
+    let dolor = lorem.sit();
+    let amet = dolor + 1;
+}
+```
+
+#### `40`:
+
+```rust
+fn main() {
+    let     lorem = Lorem::new();
+    let mut ipsum = 0;
+    let     dolor = lorem.sit();
+    let     amet  = dolor + 1;
+}
+```
+
+With `align_before_colon = true` and type annotations:
+
+```rust
+#![rustfmt::skip]
+
+fn main() {
+    let     lorem: Lorem = Lorem::new();
+    let mut ipsum: usize = 0;
+    let     dolor: Sit   = lorem.sit();
+    let     amet         = dolor + 1;
+}
+```
+
+## `match_arm_align_threshold`
+
+The maximum diff of width between the left hand sides of match arms to be aligned with each other.
+The pattern and its guard together make up the left hand side.
+
+A run of arms is aligned only while each arm stays on one line. An arm that needs more than one
+line, an arm carrying attributes, and a blank line separating two arms each end the run. A comment
+between two arms does not end it, and neither does a blank line that is part of such a comment
+rather than a separator between the arms. If the padding would push an arm onto a second line, the
+run is left unaligned.
+
+Padding can carry an arm's trailing comment past [`max_width`](#max_width), which rustfmt does not
+enforce for comments in any case.
+
+- **Default value**: 0
+- **Possible values**: any non-negative integer
+- **Stable**: No
+
+#### `0` (default):
+
+```rust
+fn main() {
+    match lorem {
+        Lorem::Ipsum => 1,
+        Lorem::Dolor if sit => 2,
+        Lorem::Sit => 3,
+        Lorem::Amet => 4,
+    }
+}
+```
+
+#### `40`:
+
+```rust
+fn main() {
+    match lorem {
+        Lorem::Ipsum        => 1,
+        Lorem::Dolor if sit => 2,
+        Lorem::Sit          => 3,
+        Lorem::Amet         => 4,
+    }
+}
 ```
 
 ## `match_arm_blocks`

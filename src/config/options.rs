@@ -696,6 +696,8 @@ config_option_with_style_edition_default!(
     StructFieldAlignThreshold, usize, _ => 0;
     EnumDiscrimAlignThreshold, usize, _ => 0;
     MatchArmAlignThreshold, usize, _ => 0;
+    LetAlignThreshold, usize, _ => 0;
+    AlignBeforeColon, bool, _ => false;
     MatchArmBlocks, bool, _ => true;
     MatchArmLeadingPipeConfig, MatchArmLeadingPipe, _ => MatchArmLeadingPipe::Never;
     MatchArmIndent, bool, _ => true;
