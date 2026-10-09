@@ -13,7 +13,7 @@ use crate::expr::{
     ExprType, RhsTactics, format_expr, is_empty_block, is_simple_block, is_unsafe_block,
     prefer_next_line, rewrite_cond,
 };
-use crate::lists::{ListFormatting, itemize_list, write_list};
+use crate::lists::{ListFormatting, ListItem, itemize_list, write_list};
 use crate::rewrite::{Rewrite, RewriteContext, RewriteError, RewriteErrorExt, RewriteResult};
 use crate::shape::Shape;
 use crate::source_map::SpanUtils;
@@ -66,6 +66,7 @@ impl<'a> Rewrite for ArmWrapper<'a> {
             shape,
             self.is_last,
             self.beginning_vert.is_some(),
+            0,
         )
     }
 }
@@ -225,7 +226,7 @@ fn rewrite_match_arms(
         context.snippet_provider,
         arms.iter()
             .zip(is_last_iter)
-            .zip(beginning_verts.into_iter())
+            .zip(beginning_verts.iter().copied())
             .map(|((arm, is_last), beginning_vert)| ArmWrapper::new(arm, is_last, beginning_vert)),
         "}",
         "|",
@@ -236,7 +237,10 @@ fn rewrite_match_arms(
         span.hi(),
         false,
     );
-    let arms_vec: Vec<_> = items.collect();
+    let mut arms_vec: Vec<_> = items.collect();
+
+    align_match_arms(context, arms, &beginning_verts, arm_shape, &mut arms_vec);
+
     // We will add/remove commas inside `arm.rewrite()`, and hence no separator here.
     let fmt = ListFormatting::new(arm_shape, context.config)
         .separator("")
@@ -245,12 +249,102 @@ fn rewrite_match_arms(
     write_list(&arms_vec, &fmt)
 }
 
+/// Pad the left hand side of runs of consecutive one-line arms so that their `=>` line up.
+///
+/// `items` already holds every arm rewritten without padding; an arm that needed more than one
+/// line there is left out of the table and breaks the run, which is what keeps a block-bodied
+/// arm from dragging its neighbours into a column that reads as unrelated.
+fn align_match_arms(
+    context: &RewriteContext<'_>,
+    arms: &[ast::Arm],
+    beginning_verts: &[Option<BytePos>],
+    shape: Shape,
+    items: &mut [ListItem],
+) {
+    let threshold = context.config.match_arm_align_threshold();
+    if threshold == 0 || arms.len() < 2 || items.len() != arms.len() {
+        return;
+    }
+
+    let widths: Vec<Option<usize>> = arms
+        .iter()
+        .zip(beginning_verts)
+        .zip(items.iter())
+        .map(|((arm, vert), item)| {
+            if !arm.attrs.is_empty() {
+                return None;
+            }
+            if item.item.as_ref().ok()?.contains('\n') {
+                return None;
+            }
+            let missing_span = mk_sp(arm.span().lo(), arm.span().lo());
+            let lhs = rewrite_match_arm_lhs(context, arm, shape, vert.is_some(), "", missing_span)
+                .ok()?;
+            if lhs.str.contains('\n') {
+                return None;
+            }
+            Some(unicode_str_width(&lhs.str))
+        })
+        .collect();
+
+    let mut i = 0;
+    while i < arms.len() {
+        if widths[i].is_none() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        // A run is broken by a blank line that separates two arms outright, which is exactly
+        // when `write_list` pushes a newline of its own. Reading the same flag it reads keeps
+        // run breaks and blank lines in lockstep; deciding from the source gap instead breaks
+        // runs on blank lines this pass goes on to delete, leaving the next pass to align the
+        // run this one left alone. A blank line within a comment between two arms is part of
+        // that comment rather than a separator, and does not break the run.
+        while j + 1 < arms.len() && widths[j + 1].is_some() && !items[j].new_lines {
+            j += 1;
+        }
+
+        let group = &widths[i..=j];
+        let max = group.iter().flatten().copied().max().unwrap_or(0);
+        let min = group.iter().flatten().copied().min().unwrap_or(0);
+        if j > i && max - min <= threshold {
+            let mut aligned = Vec::with_capacity(j - i + 1);
+            for k in i..=j {
+                let rewritten = rewrite_match_arm(
+                    context,
+                    &arms[k],
+                    shape,
+                    k == arms.len() - 1,
+                    beginning_verts[k].is_some(),
+                    max,
+                );
+                match rewritten {
+                    Ok(s) if !s.contains('\n') => aligned.push(s),
+                    // Padding stole width the body needed, so the table would cost more
+                    // lines than it buys; leave the whole run as it was.
+                    _ => {
+                        aligned.clear();
+                        break;
+                    }
+                }
+            }
+            if !aligned.is_empty() {
+                for (k, s) in (i..=j).zip(aligned) {
+                    items[k].item = Ok(s);
+                }
+            }
+        }
+        i = j + 1;
+    }
+}
+
 fn rewrite_match_arm(
     context: &RewriteContext<'_>,
     arm: &ast::Arm,
     shape: Shape,
     is_last: bool,
     has_leading_pipe: bool,
+    lhs_pad: usize,
 ) -> RewriteResult {
     let (missing_span, attrs_str) = if !arm.attrs.is_empty() {
         if contains_skip(&arm.attrs) {
@@ -268,6 +362,51 @@ fn rewrite_match_arm(
         (mk_sp(arm.span().lo(), arm.span().lo()), String::new())
     };
 
+    let lhs = rewrite_match_arm_lhs(
+        context,
+        arm,
+        shape,
+        has_leading_pipe,
+        &attrs_str,
+        missing_span,
+    )?;
+    let mut lhs_str = lhs.str;
+    if lhs_pad > 0 && !lhs_str.contains('\n') {
+        let width = unicode_str_width(&lhs_str);
+        if width < lhs_pad {
+            lhs_str.push_str(&" ".repeat(lhs_pad - width));
+        }
+    }
+
+    let arrow_span = mk_sp(
+        arm.pat.span.hi(),
+        arm.body.as_ref().unknown_error()?.span().lo(),
+    );
+    rewrite_match_body(
+        context,
+        arm.body.as_ref().unknown_error()?,
+        &lhs_str,
+        shape,
+        lhs.guard_multiline,
+        arrow_span,
+        is_last,
+    )
+}
+
+/// Everything in an arm to the left of the `=>`.
+struct ArmLhs {
+    str: String,
+    guard_multiline: bool,
+}
+
+fn rewrite_match_arm_lhs(
+    context: &RewriteContext<'_>,
+    arm: &ast::Arm,
+    shape: Shape,
+    has_leading_pipe: bool,
+    attrs_str: &str,
+    missing_span: Span,
+) -> Result<ArmLhs, RewriteError> {
     // Leading pipe offset
     // 2 = `| `
     let (pipe_offset, pipe_str) = match context.config.match_arm_leading_pipes() {
@@ -306,28 +445,19 @@ fn rewrite_match_arm(
         new_line_guard,
     )?;
 
-    let lhs_str = combine_strs_with_missing_comments(
+    let str = combine_strs_with_missing_comments(
         context,
-        &attrs_str,
+        attrs_str,
         &format!("{pipe_str}{pats_str}{guard_str}"),
         missing_span,
         shape,
         false,
     )?;
 
-    let arrow_span = mk_sp(
-        arm.pat.span.hi(),
-        arm.body.as_ref().unknown_error()?.span().lo(),
-    );
-    rewrite_match_body(
-        context,
-        arm.body.as_ref().unknown_error()?,
-        &lhs_str,
-        shape,
-        guard_str.contains('\n'),
-        arrow_span,
-        is_last,
-    )
+    Ok(ArmLhs {
+        str,
+        guard_multiline: guard_str.contains('\n'),
+    })
 }
 
 fn stmt_is_expr_mac(stmt: &ast::Stmt) -> bool {
