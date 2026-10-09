@@ -131,6 +131,11 @@ create_config! {
     enum_discrim_align_threshold: EnumDiscrimAlignThreshold, false,
         "Align enum variants discrims, if their diffs fit within threshold";
     match_arm_align_threshold: MatchArmAlignThreshold, false,
+        "Align match arm bodies, if their pattern width diffs fit within threshold";
+    let_align_threshold: LetAlignThreshold, false,
+        "Align runs of consecutive let bindings, if their diffs fit within threshold";
+    align_before_colon: AlignBeforeColon, false,
+        "Place alignment padding before the colon rather than after it";
     match_arm_blocks: MatchArmBlocks, false, "Wrap the body of arms in blocks when it does not fit \
         on the same line with the pattern of arms";
     match_arm_leading_pipes: MatchArmLeadingPipeConfig, true,
@@ -823,6 +828,8 @@ overflow_delimited_expr = false
 struct_field_align_threshold = 0
 enum_discrim_align_threshold = 0
 match_arm_align_threshold = 0
+let_align_threshold = 0
+align_before_colon = false
 match_arm_blocks = true
 match_arm_leading_pipes = "Never"
 match_arm_indent = true
@@ -917,6 +924,8 @@ overflow_delimited_expr = false
 struct_field_align_threshold = 0
 enum_discrim_align_threshold = 0
 match_arm_align_threshold = 0
+let_align_threshold = 0
+align_before_colon = false
 match_arm_blocks = true
 match_arm_leading_pipes = "Never"
 match_arm_indent = true

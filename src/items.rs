@@ -25,7 +25,8 @@ use crate::lists::{ListFormatting, Separator, definitive_tactic, itemize_list, w
 use crate::macros::{MacroPosition, rewrite_macro};
 use crate::overflow;
 use crate::rewrite::{
-    ExceedsMaxWidthError, Rewrite, RewriteContext, RewriteError, RewriteErrorExt, RewriteResult,
+    ExceedsMaxWidthError, LetAlignMode, LetLhs, Rewrite, RewriteContext, RewriteError,
+    RewriteErrorExt, RewriteResult,
 };
 use crate::shape::{Indent, Shape};
 use crate::source_map::{LineRangeUtils, SpanUtils};
@@ -41,7 +42,7 @@ const DEFAULT_VISIBILITY: ast::Visibility = ast::Visibility {
     span: DUMMY_SP,
 };
 
-fn type_annotation_separator(config: &Config) -> &str {
+pub(crate) fn type_annotation_separator(config: &Config) -> &str {
     colon_spaces(config)
 }
 
@@ -85,45 +86,107 @@ impl Rewrite for ast::Local {
         };
         let let_kw_offset = result.len() - let_.len();
 
-        let pat_shape = shape.offset_left(let_.len(), self.span())?;
+        let align = context.let_align.replace(LetAlignMode::Off);
+        let is_let_else = self
+            .kind
+            .init_else_opt()
+            .is_some_and(|(_, els)| els.is_some());
+        let alignable =
+            self.attrs.is_empty() && !super_ && self.kind.init().is_some() && !is_let_else;
+        // `mut` is part of the pattern, so a binding without it needs the column held open.
+        let is_mut = matches!(
+            self.pat.kind,
+            ast::PatKind::Ident(ast::BindingMode(ast::ByRef::No, ast::Mutability::Mut), ..)
+        );
+        let plan = match align {
+            LetAlignMode::Apply(plan) if alignable => Some(plan),
+            _ => None,
+        };
+        let mut_pad = match plan {
+            Some(plan) if !is_mut => plan.mut_slot,
+            _ => 0,
+        };
+
+        let pat_shape = shape.offset_left(let_.len() + mut_pad, self.span())?;
         // 1 = ;
         let pat_shape = pat_shape.sub_width(1, self.span())?;
         let pat_str = self.pat.rewrite_result(context, pat_shape)?;
+        let pat_col = mut_pad + unicode_str_width(&pat_str);
 
+        // With the colons in a column, the padding that gets the binding there goes on
+        // whichever side of the colon `align_before_colon` asks for.
+        let colon_pad = match plan {
+            Some(plan) if plan.ty_target.is_some() => plan.pat_target.saturating_sub(pat_col),
+            _ => 0,
+        };
+        let (before_colon, after_colon) = if context.config.align_before_colon() {
+            (colon_pad, 0)
+        } else {
+            (0, colon_pad)
+        };
+
+        result.push_str(&" ".repeat(mut_pad));
         result.push_str(&pat_str);
+        result.push_str(&" ".repeat(before_colon));
 
-        // String that is placed within the assignment pattern and expression.
-        let infix = {
-            let mut infix = String::with_capacity(32);
-
-            if let Some(ref ty) = self.ty {
-                let separator = type_annotation_separator(context.config);
+        let separator = type_annotation_separator(context.config);
+        let ty_str = match self.ty {
+            Some(ref ty) => {
                 let ty_shape = if pat_str.contains('\n') {
                     shape.with_max_width(context.config)
                 } else {
                     shape
                 }
                 .offset_left(
-                    last_line_width(&result, context.config.tab_spaces()) + separator.len(),
+                    last_line_width(&result, context.config.tab_spaces())
+                        + separator.len()
+                        + after_colon,
                     self.span(),
                 )?
                 // 2 = ` =`
                 .sub_width(2, self.span())?;
 
-                let rewrite = ty.rewrite_result(context, ty_shape)?;
-
-                infix.push_str(separator);
-                infix.push_str(&rewrite);
+                Some(ty.rewrite_result(context, ty_shape)?)
             }
-
-            if self.kind.init().is_some() {
-                infix.push_str(" =");
-            }
-
-            infix
+            None => None,
         };
 
-        result.push_str(&infix);
+        if let Some(ref ty) = ty_str {
+            result.push_str(separator);
+            result.push_str(&" ".repeat(after_colon));
+            result.push_str(ty);
+        }
+
+        let ty_width = ty_str.as_deref().map(unicode_str_width);
+        // Padding placed after the colon is only emitted when there is a type to follow it,
+        // so an unannotated binding must not be charged for it.
+        let lhs_width =
+            pat_col + before_colon + ty_width.map_or(0, |w| separator.len() + after_colon + w);
+        let lhs_one_line =
+            !pat_str.contains('\n') && !ty_str.as_deref().is_some_and(|t| t.contains('\n'));
+        match align {
+            LetAlignMode::Measure if alignable && lhs_one_line => {
+                context.let_lhs.set(Some(LetLhs {
+                    pat_width: unicode_str_width(&pat_str),
+                    ty_width,
+                    is_mut,
+                }));
+            }
+            LetAlignMode::Apply(plan) if alignable && lhs_one_line => {
+                // An unannotated binding in a colon-aligned run still holds the colon and
+                // type columns open, so that every `=` lands together.
+                let target = match plan.ty_target {
+                    Some(ty_target) => plan.pat_target + separator.len() + ty_target,
+                    None => plan.lhs_target,
+                };
+                result.push_str(&" ".repeat(target.saturating_sub(lhs_width)));
+            }
+            _ => {}
+        }
+
+        if self.kind.init().is_some() {
+            result.push_str(" =");
+        }
 
         if let Some((init, else_block)) = self.kind.init_else_opt() {
             // 1 = trailing semicolon;
@@ -1971,7 +2034,7 @@ pub(crate) fn rewrite_struct_field(
         ""
     });
     // Try to put everything on a single line.
-    let attr_prefix = combine_strs_with_missing_comments(
+    let mut attr_prefix = combine_strs_with_missing_comments(
         context,
         &attrs_str,
         &prefix,
@@ -1981,16 +2044,26 @@ pub(crate) fn rewrite_struct_field(
     )?;
     let overhead = trimmed_last_line_width(&attr_prefix);
     let lhs_offset = lhs_max_width.saturating_sub(overhead);
-    for _ in 0..lhs_offset {
-        spacing.push(' ');
+    let pad_before_colon =
+        context.config.align_before_colon() && field.ident.is_some() && attr_prefix.ends_with(':');
+    if pad_before_colon {
+        let colon = attr_prefix.len() - 1;
+        attr_prefix.insert_str(colon, &" ".repeat(lhs_offset));
+    } else {
+        for _ in 0..lhs_offset {
+            spacing.push(' ');
+        }
     }
+    // Only the `pad_before_colon` branch put the padding in the prefix; otherwise it is in
+    // `spacing`, and counting it here as well would charge the type for it twice.
+    let lhs_width = overhead + if pad_before_colon { lhs_offset } else { 0 };
     // In this extreme case we will be missing a space between an attribute and a field.
     if prefix.is_empty() && !attrs_str.is_empty() && attrs_extendable && spacing.is_empty() {
         spacing.push(' ');
     }
 
     let orig_ty = shape
-        .offset_left_opt(overhead + spacing.len())
+        .offset_left_opt(lhs_width + spacing.len())
         .and_then(|ty_shape| field.ty.rewrite_result(context, ty_shape).ok());
 
     if let Some(ref ty) = orig_ty {

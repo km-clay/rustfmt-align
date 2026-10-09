@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -15,11 +16,12 @@ use crate::coverage::transform_missing_snippet;
 use crate::items::{
     FnBraceStyle, FnSig, ItemVisitorKind, StaticParts, StructParts, format_impl, format_trait,
     format_trait_alias, is_mod_decl, is_use_item, rewrite_extern_crate, rewrite_type_alias,
+    type_annotation_separator,
 };
 use crate::macros::{MacroPosition, macro_style, rewrite_macro, rewrite_macro_def};
 use crate::modules::Module;
 use crate::parse::session::ParseSess;
-use crate::rewrite::{Rewrite, RewriteContext};
+use crate::rewrite::{LetAlignMode, LetAlignPlan, LetLhs, Rewrite, RewriteContext};
 use crate::shape::{Indent, Shape};
 use crate::skip::{SkipContext, is_skip_attr};
 use crate::source_map::{LineRangeUtils, SpanUtils};
@@ -90,6 +92,11 @@ pub(crate) struct FmtVisitor<'a> {
     pub(crate) report: FormatReport,
     pub(crate) skip_context: SkipContext,
     pub(crate) is_macro_def: bool,
+    /// Columns for the run of `let` statements being emitted, if any.
+    let_align: Option<LetAlignPlan>,
+    let_align_remaining: usize,
+    /// Measurements are independent of where a run starts, so they outlive a rescan.
+    let_lhs_cache: RefCell<HashMap<BytePos, Option<LetLhs>>>,
 }
 
 impl<'a> Drop for FmtVisitor<'a> {
@@ -855,6 +862,9 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
             macro_rewrite_failure: false,
             report,
             skip_context,
+            let_align: None,
+            let_align_remaining: 0,
+            let_lhs_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -942,7 +952,22 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
             .collect();
 
         if items.is_empty() {
+            if self.let_align_remaining == 0 {
+                match self.compute_let_align(stmts) {
+                    Some((plan, count)) => {
+                        self.let_align = Some(plan);
+                        self.let_align_remaining = count;
+                    }
+                    None => self.let_align = None,
+                }
+            }
+
             self.visit_stmt(&stmts[0], include_current_empty_semi);
+
+            self.let_align_remaining = self.let_align_remaining.saturating_sub(1);
+            if self.let_align_remaining == 0 {
+                self.let_align = None;
+            }
 
             // FIXME(calebcartwright 2021-01-03) - This exists strictly to maintain legacy
             // formatting where rustfmt would preserve redundant semicolons on Items in a
@@ -967,6 +992,8 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
 
             self.walk_stmts(&stmts[1..], include_next_empty);
         } else {
+            self.let_align = None;
+            self.let_align_remaining = 0;
             self.visit_items_with_reordering(&items);
             self.walk_stmts(&stmts[items.len()..], false);
         }
@@ -1081,6 +1108,11 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
             report: self.report.clone(),
             skip_context: self.skip_context.clone(),
             skipped_range: self.skipped_range.clone(),
+            let_align: Cell::new(match self.let_align {
+                Some(plan) => LetAlignMode::Apply(plan),
+                None => LetAlignMode::Off,
+            }),
+            let_lhs: Cell::new(None),
         }
     }
 
@@ -1121,5 +1153,113 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
                 allowed_to_add_semi && self.config.trailing_semicolon()
             }
         }
+    }
+
+    /// A context for a rewrite whose output is thrown away. Diagnostics raised by a trial
+    /// would otherwise be appended to the shared report and counted twice.
+    fn trial_context(&self) -> RewriteContext<'_> {
+        let mut ctx = self.get_context();
+        ctx.report = FormatReport::new();
+        ctx
+    }
+
+    /// Measures the run of alignable `let` statements starting at `stmts[0]` and returns the
+    /// columns to pad them into, with how many statements they cover.
+    fn compute_let_align(&self, stmts: &[Stmt<'_>]) -> Option<(LetAlignPlan, usize)> {
+        let threshold = self.config.let_align_threshold();
+        if threshold == 0 {
+            return None;
+        }
+        let shape = self.shape();
+
+        let mut measured: Vec<LetLhs> = Vec::new();
+        for stmt in stmts {
+            let node = stmt.as_ast_node();
+            if !matches!(node.kind, ast::StmtKind::Let(_))
+                || contains_skip(get_attrs_from_stmt(node))
+            {
+                break;
+            }
+            let key = stmt.span().lo();
+            let cached = self.let_lhs_cache.borrow().get(&key).copied();
+            let entry = match cached {
+                Some(entry) => entry,
+                None => {
+                    let ctx = self.trial_context();
+                    ctx.let_align.set(LetAlignMode::Measure);
+                    // A `let` that already needs more than one line is not a row in a table,
+                    // and it ends the run rather than being padded into one.
+                    let entry = match stmt.rewrite_result(&ctx, shape) {
+                        Ok(s) if !s.contains('\n') => ctx.let_lhs.get(),
+                        _ => None,
+                    };
+                    self.let_lhs_cache.borrow_mut().insert(key, entry);
+                    entry
+                }
+            };
+            match entry {
+                Some(entry) => measured.push(entry),
+                None => break,
+            }
+        }
+        if measured.len() < 2 {
+            return None;
+        }
+
+        let mut_slot = if measured.iter().any(|m| m.is_mut) {
+            4
+        } else {
+            0
+        };
+        let pat_col = |m: &LetLhs| m.pat_width + if m.is_mut { 0 } else { mut_slot };
+        let pat_target = measured.iter().map(pat_col).max()?;
+        let pat_min = measured.iter().map(pat_col).min()?;
+        if pat_target - pat_min > threshold {
+            return None;
+        }
+
+        // The type column is measured over the annotated bindings only: an unannotated one
+        // has no type to sit in it, and would otherwise read as width zero and veto the run.
+        let sep_len = type_annotation_separator(self.config).len();
+        let tys: Vec<usize> = measured.iter().filter_map(|m| m.ty_width).collect();
+        let ty_target = match (tys.iter().max(), tys.iter().min()) {
+            (Some(&max), Some(&min)) if max - min <= threshold => Some(max),
+            _ => None,
+        };
+
+        let lhs_target = measured
+            .iter()
+            .map(|m| pat_col(m) + m.ty_width.map_or(0, |w| sep_len + w))
+            .max()?;
+
+        let nothing_to_pad = mut_slot == 0
+            && pat_target == pat_min
+            && match ty_target {
+                None => measured.iter().all(|m| m.ty_width.is_none()),
+                Some(target) => measured.iter().all(|m| m.ty_width == Some(target)),
+            };
+        if nothing_to_pad {
+            return None;
+        }
+
+        let plan = LetAlignPlan {
+            mut_slot,
+            pat_target,
+            ty_target,
+            lhs_target,
+        };
+
+        for stmt in stmts.iter().take(measured.len()) {
+            let ctx = self.trial_context();
+            ctx.let_align.set(LetAlignMode::Apply(plan));
+            match stmt.rewrite_result(&ctx, shape) {
+                Ok(s) if !s.contains('\n') => {}
+                // Padding stole width the initializer needed; the table would cost more lines
+                // than it buys, so the whole run stays as it was.
+                _ => return None,
+            }
+        }
+
+        Some((plan, measured.len()))
     }
 }
