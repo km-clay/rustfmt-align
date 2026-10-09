@@ -695,6 +695,7 @@ config_option_with_style_edition_default!(
     OverflowDelimitedExpr, bool, _ => false;
     StructFieldAlignThreshold, usize, _ => 0;
     EnumDiscrimAlignThreshold, usize, _ => 0;
+    MatchArmAlignThreshold, usize, _ => 0;
     MatchArmBlocks, bool, _ => true;
     MatchArmLeadingPipeConfig, MatchArmLeadingPipe, _ => MatchArmLeadingPipe::Never;
     MatchArmIndent, bool, _ => true;
