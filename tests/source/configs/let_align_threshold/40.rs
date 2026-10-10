@@ -102,3 +102,19 @@ fn type_widths_are_display_columns() {
     let a: 日本語 = x;
     let bbbb: u8 = y;
 }
+
+fn a_lone_annotation_does_not_reserve_a_type_column() {
+    let mut abbreviate_home = true;
+    let mut one_per_line = false;
+    let mut one_per_line_indexed = false;
+    let mut clear_stack = false;
+    let mut target_idx: Option<StackIdx> = None;
+    let blame = args.span();
+}
+
+fn two_annotations_do_reserve_one() {
+    let mut abbreviate_home = true;
+    let mut clear_stack: bool = false;
+    let mut target_idx: Option<StackIdx> = None;
+    let blame = args.span();
+}

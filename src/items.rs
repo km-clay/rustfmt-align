@@ -173,13 +173,7 @@ impl Rewrite for ast::Local {
                 }));
             }
             LetAlignMode::Apply(plan) if alignable && lhs_one_line => {
-                // An unannotated binding in a colon-aligned run still holds the colon and
-                // type columns open, so that every `=` lands together.
-                let target = match plan.ty_target {
-                    Some(ty_target) => plan.pat_target + separator.len() + ty_target,
-                    None => plan.lhs_target,
-                };
-                result.push_str(&" ".repeat(target.saturating_sub(lhs_width)));
+                result.push_str(&" ".repeat(plan.lhs_target.saturating_sub(lhs_width)));
             }
             _ => {}
         }
