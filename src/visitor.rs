@@ -1202,64 +1202,86 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
                 None => break,
             }
         }
+        // The longest prefix of the run that fits the threshold becomes the next table. What
+        // is left is partitioned by the calls that follow, so a run too wide to align as a
+        // whole turns into a series of narrower tables rather than one arbitrary fragment.
+        (2..=measured.len()).rev().find_map(|len| {
+            let plan = self.let_align_plan(&measured[..len], threshold)?;
+            self.verify_let_align(&stmts[..len], shape, plan)
+                .then_some((plan, len))
+        })
+    }
+
+    /// The columns to pad one table of `let` bindings into, if the widest row of padding it
+    /// would add comes in within `threshold`.
+    fn let_align_plan(&self, measured: &[LetLhs], threshold: usize) -> Option<LetAlignPlan> {
         if measured.len() < 2 {
             return None;
         }
-
         let mut_slot = if measured.iter().any(|m| m.is_mut) {
             4
         } else {
             0
         };
         let pat_col = |m: &LetLhs| m.pat_width + if m.is_mut { 0 } else { mut_slot };
-        let pat_target = measured.iter().map(pat_col).max()?;
-        let pat_min = measured.iter().map(pat_col).min()?;
-        if pat_target - pat_min > threshold {
-            return None;
-        }
-
-        // The type column is measured over the annotated bindings only: an unannotated one
-        // has no type to sit in it, and would otherwise read as width zero and veto the run.
         let sep_len = type_annotation_separator(self.config).len();
-        let tys: Vec<usize> = measured.iter().filter_map(|m| m.ty_width).collect();
-        let ty_target = match (tys.iter().max(), tys.iter().min()) {
-            (Some(&max), Some(&min)) if max - min <= threshold => Some(max),
-            _ => None,
+        // What a binding occupies before any alignment padding. The `mut` column is structural
+        // rather than padding, so it is counted here and not against the threshold.
+        let natural = |m: &LetLhs| pat_col(m) + m.ty_width.map_or(0, |w| sep_len + w);
+        let narrowest = measured.iter().map(natural).min()?;
+
+        // A column of one is not a column: a lone annotated binding has no other colon to line
+        // up with, so reserving the column only pushes its type, and every unannotated
+        // binding's `=`, further right for nothing.
+        let annotated = || measured.iter().filter(|m| m.ty_width.is_some());
+        let columned = if annotated().count() >= 2 {
+            // The colons are placed by the bindings that have one. An unannotated binding never
+            // enters that column, so its name runs through it; only its `=` has to land with
+            // the rest.
+            let pat_target = annotated().map(pat_col).max().unwrap_or(0);
+            let ty_target = annotated().filter_map(|m| m.ty_width).max().unwrap_or(0);
+            Some((pat_target, ty_target))
+        } else {
+            None
         };
 
-        let lhs_target = measured
-            .iter()
-            .map(|m| pat_col(m) + m.ty_width.map_or(0, |w| sep_len + w))
-            .max()?;
-
-        let nothing_to_pad = mut_slot == 0
-            && pat_target == pat_min
-            && match ty_target {
-                None => measured.iter().all(|m| m.ty_width.is_none()),
-                Some(target) => measured.iter().all(|m| m.ty_width == Some(target)),
+        // Try the table with its colon column, then without it, and take the first whose
+        // widest row of padding is within the threshold. Dropping the column is a real
+        // fallback: it leaves the colons against their patterns but still lands every `=`.
+        let plan = [columned, None].into_iter().find_map(|columns| {
+            let (pat_target, ty_target) = match columns {
+                Some((p, t)) => (p, Some(t)),
+                None => (0, None),
             };
-        if nothing_to_pad {
+            let lhs_target = measured
+                .iter()
+                .map(|m| match (ty_target, m.ty_width) {
+                    (Some(ty_target), Some(_)) => pat_target + sep_len + ty_target,
+                    _ => natural(m),
+                })
+                .max()?;
+            (lhs_target - narrowest <= threshold).then_some(LetAlignPlan {
+                mut_slot,
+                pat_target,
+                ty_target,
+                lhs_target,
+            })
+        })?;
+
+        if mut_slot == 0 && measured.iter().all(|m| natural(m) == plan.lhs_target) {
             return None;
         }
+        Some(plan)
+    }
 
-        let plan = LetAlignPlan {
-            mut_slot,
-            pat_target,
-            ty_target,
-            lhs_target,
-        };
-
-        for stmt in stmts.iter().take(measured.len()) {
+    /// `true` if every binding in the table still renders on one line once padded.
+    fn verify_let_align(&self, stmts: &[Stmt<'_>], shape: Shape, plan: LetAlignPlan) -> bool {
+        stmts.iter().all(|stmt| {
             let ctx = self.trial_context();
             ctx.let_align.set(LetAlignMode::Apply(plan));
-            match stmt.rewrite_result(&ctx, shape) {
-                Ok(s) if !s.contains('\n') => {}
-                // Padding stole width the initializer needed; the table would cost more lines
-                // than it buys, so the whole run stays as it was.
-                _ => return None,
-            }
-        }
-
-        Some((plan, measured.len()))
+            // Padding stole width the initializer needed; the table would cost more lines
+            // than it buys, so this run stays as it was.
+            matches!(stmt.rewrite_result(&ctx, shape), Ok(s) if !s.contains('\n'))
+        })
     }
 }

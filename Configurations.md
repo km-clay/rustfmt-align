@@ -1776,15 +1776,18 @@ use core::slice;
 
 ## `let_align_threshold`
 
-The maximum diff of width between the left hand sides of consecutive `let` bindings to be aligned
-with each other. `mut` is given a column of its own, so which bindings are mutable can be read off
-the left edge, and type annotations are given another, so that the colons and the `=` each line up.
-[`align_before_colon`](#align_before_colon) decides which side of the colon its padding goes.
+The most padding, in columns, that aligning a run of consecutive `let` bindings may add to any one
+of them. A run needing more than this is left alone. `mut` is given a column of its own, so which
+bindings are mutable can be read off the left edge; it is structural rather than padding and is not
+counted against the threshold. Type annotations are given another column, so that the colons and
+the `=` each line up, and [`align_before_colon`](#align_before_colon) decides which side of the
+colon that column's padding goes.
 
-The type column is measured over the annotated bindings in a run only, and is dropped when their
-widths differ by more than the threshold, leaving the colons against their patterns and only the
-`=` aligned. An unannotated binding holds the colon and type columns open so that every `=` in the
-run still lands together.
+The colons are placed by the bindings that have one, so an unannotated binding's name runs straight
+through the colon column and only its `=` has to land with the rest. A single annotated binding in
+a run gets no column at all, having no other colon to line up with. If the table does not fit the
+threshold with its colon column, it is retried without one — leaving the colons against their
+patterns but still aligning every `=` — and only then given up on.
 
 Only runs of `let` statements are aligned, and any other statement ends the run; a blank line and a
 comment do not. A binding with no initializer, a `let` ... `else`, a `super let`, one carrying

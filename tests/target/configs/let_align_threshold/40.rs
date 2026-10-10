@@ -86,19 +86,35 @@ fn a_standalone_comment_does_not_end_a_run() {
 }
 
 fn an_unannotated_binding_holds_the_type_column_open() {
-    let a:    u8    = 1;
-    let bbbb        = 2;
-    let cc:   usize = 3;
-    let d           = 4;
+    let a:  u8    = 1;
+    let bbbb      = 2;
+    let cc: usize = 3;
+    let d         = 4;
 }
 
 fn a_wide_type_spread_leaves_the_colons_unaligned() {
-    let a: u8                                               = 1;
+    let a: u8 = 1;
     let b: Arc<dyn Fn(usize) -> Result<Vec<String>, Error>> = f();
-    let c: u8                                               = 3;
+    let c: u8 = 3;
 }
 
 fn type_widths_are_display_columns() {
     let a:    日本語 = x;
     let bbbb: u8     = y;
+}
+
+fn a_lone_annotation_does_not_reserve_a_type_column() {
+    let mut abbreviate_home              = true;
+    let mut one_per_line                 = false;
+    let mut one_per_line_indexed         = false;
+    let mut clear_stack                  = false;
+    let mut target_idx: Option<StackIdx> = None;
+    let     blame                        = args.span();
+}
+
+fn two_annotations_do_reserve_one() {
+    let mut abbreviate_home               = true;
+    let mut clear_stack: bool             = false;
+    let mut target_idx:  Option<StackIdx> = None;
+    let     blame                         = args.span();
 }

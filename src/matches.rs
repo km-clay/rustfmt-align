@@ -304,37 +304,47 @@ fn align_match_arms(
             j += 1;
         }
 
-        let group = &widths[i..=j];
-        let max = group.iter().flatten().copied().max().unwrap_or(0);
-        let min = group.iter().flatten().copied().min().unwrap_or(0);
-        if j > i && max - min <= threshold {
-            let mut aligned = Vec::with_capacity(j - i + 1);
-            for k in i..=j {
-                let rewritten = rewrite_match_arm(
-                    context,
-                    &arms[k],
-                    shape,
-                    k == arms.len() - 1,
-                    beginning_verts[k].is_some(),
-                    max,
-                );
-                match rewritten {
-                    Ok(s) if !s.contains('\n') => aligned.push(s),
-                    // Padding stole width the body needed, so the table would cost more
-                    // lines than it buys; leave the whole run as it was.
-                    _ => {
-                        aligned.clear();
-                        break;
+        // The longest prefix of the run that fits the threshold becomes the next table, and
+        // the rest is partitioned by the iterations that follow. A run too wide to align as
+        // a whole therefore turns into a series of narrower tables rather than one fragment
+        // chosen by where the scan happened to start.
+        let mut next = i + 1;
+        while j > i {
+            let group = &widths[i..=j];
+            let max = group.iter().flatten().copied().max().unwrap_or(0);
+            let min = group.iter().flatten().copied().min().unwrap_or(0);
+            if max - min <= threshold {
+                let mut aligned = Vec::with_capacity(j - i + 1);
+                for k in i..=j {
+                    let rewritten = rewrite_match_arm(
+                        context,
+                        &arms[k],
+                        shape,
+                        k == arms.len() - 1,
+                        beginning_verts[k].is_some(),
+                        max,
+                    );
+                    match rewritten {
+                        Ok(s) if !s.contains('\n') => aligned.push(s),
+                        // Padding stole width the body needed, so this table would cost more
+                        // lines than it buys; try a shorter one.
+                        _ => {
+                            aligned.clear();
+                            break;
+                        }
                     }
                 }
-            }
-            if !aligned.is_empty() {
-                for (k, s) in (i..=j).zip(aligned) {
-                    items[k].item = Ok(s);
+                if !aligned.is_empty() {
+                    for (k, s) in (i..=j).zip(aligned) {
+                        items[k].item = Ok(s);
+                    }
+                    next = j + 1;
+                    break;
                 }
             }
+            j -= 1;
         }
-        i = j + 1;
+        i = next;
     }
 }
 
