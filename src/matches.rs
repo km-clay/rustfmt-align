@@ -265,6 +265,10 @@ fn align_match_arms(
     if threshold == 0 || arms.len() < 2 || items.len() != arms.len() {
         return;
     }
+    let stretch_limit = match context.config.align_stretch_threshold() {
+        0 => usize::MAX,
+        n => n,
+    };
 
     let widths: Vec<Option<usize>> = arms
         .iter()
@@ -310,10 +314,17 @@ fn align_match_arms(
         // chosen by where the scan happened to start.
         let mut next = i + 1;
         while j > i {
-            let group = &widths[i..=j];
-            let max = group.iter().flatten().copied().max().unwrap_or(0);
-            let min = group.iter().flatten().copied().min().unwrap_or(0);
-            if max - min <= threshold {
+            let mut group: Vec<usize> = widths[i..=j].iter().flatten().copied().collect();
+            group.sort_unstable();
+            let max = *group.last().unwrap_or(&0);
+            let min = *group.first().unwrap_or(&0);
+            // What the table would be without its widest arm; reaching far past that widens
+            // every other arm, which gets its own budget.
+            let without_widest = group
+                .get(group.len().saturating_sub(2))
+                .copied()
+                .unwrap_or(0);
+            if max - min <= threshold && max - without_widest <= stretch_limit {
                 let mut aligned = Vec::with_capacity(j - i + 1);
                 for k in i..=j {
                     let rewritten = rewrite_match_arm(

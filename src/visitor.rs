@@ -1228,7 +1228,17 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
         // What a binding occupies before any alignment padding. The `mut` column is structural
         // rather than padding, so it is counted here and not against the threshold.
         let natural = |m: &LetLhs| pat_col(m) + m.ty_width.map_or(0, |w| sep_len + w);
-        let narrowest = measured.iter().map(natural).min()?;
+        let mut naturals: Vec<usize> = measured.iter().map(natural).collect();
+        naturals.sort_unstable();
+        let narrowest = *naturals.first()?;
+        // What the table would be without its widest row. A row that reaches far past this is
+        // stretching the table for everyone else, which costs more than the padding it takes
+        // on itself, so the two are allowed separate budgets.
+        let without_widest = *naturals.get(naturals.len() - 2)?;
+        let stretch_limit = match self.config.align_stretch_threshold() {
+            0 => usize::MAX,
+            n => n,
+        };
 
         // A column of one is not a column: a lone annotated binding has no other colon to line
         // up with, so reserving the column only pushes its type, and every unannotated
@@ -1260,7 +1270,9 @@ impl<'b, 'a: 'b> FmtVisitor<'a> {
                     _ => natural(m),
                 })
                 .max()?;
-            (lhs_target - narrowest <= threshold).then_some(LetAlignPlan {
+            let absorbs = lhs_target - narrowest <= threshold;
+            let stretches = lhs_target.saturating_sub(without_widest) <= stretch_limit;
+            (absorbs && stretches).then_some(LetAlignPlan {
                 mut_slot,
                 pat_target,
                 ty_target,
