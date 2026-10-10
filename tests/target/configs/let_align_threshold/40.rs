@@ -1,4 +1,5 @@
 // rustfmt-let_align_threshold: 40
+// rustfmt-align_stretch_threshold: 10
 
 fn basic() {
     let     spec   = FloatSpec::from_args(&args)?;
@@ -15,9 +16,9 @@ fn basic() {
 }
 
 fn type_annotations() {
-    let     a:    u8          = 1;
-    let     bbbb: Vec<String> = vec![];
-    let mut c                 = 3;
+    let a: u8 = 1;
+    let bbbb: Vec<String> = vec![];
+    let mut c = 3;
 }
 
 fn uninit_breaks_the_run() {
@@ -75,7 +76,7 @@ fn tuple_patterns() {
 }
 
 fn a_trailing_comment_may_extend_past_max_width() {
-    let a                                  = 1; // a comment long enough that padding carries it past the maximum width
+    let a = 1; // a comment long enough that padding carries it past the maximum width
     let bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb = 2;
 }
 
@@ -113,8 +114,14 @@ fn a_lone_annotation_does_not_reserve_a_type_column() {
 }
 
 fn two_annotations_do_reserve_one() {
-    let mut abbreviate_home               = true;
-    let mut clear_stack: bool             = false;
-    let mut target_idx:  Option<StackIdx> = None;
-    let     blame                         = args.span();
+    let mut abbreviate_home   = true;
+    let mut clear_stack: bool = false;
+    let mut target_idx: Option<StackIdx> = None;
+    let blame = args.span();
+}
+
+fn a_wide_binding_may_not_stretch_the_table_for_the_rest() {
+    let lorem_ipsum_dolor_sit_amet = 1;
+    let sit  = 2;
+    let amet = 3;
 }

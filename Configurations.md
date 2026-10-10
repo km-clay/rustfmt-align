@@ -52,6 +52,49 @@ struct Lorem {
 }
 ```
 
+## `align_stretch_threshold`
+
+How far one row may widen an aligned table beyond the rest of its rows. `0`, the default, imposes
+no separate limit.
+
+Padding a table costs two different things, and this splits them. A row *wider* than the rest
+stretches the table and every other row pays for it, so that is kept on a short leash. A row
+*narrower* than the rest only lengthens its own run of whitespace, which is cheaper, and is bounded
+instead by [`match_arm_align_threshold`](#match_arm_align_threshold) or
+[`let_align_threshold`](#let_align_threshold). With one number doing both jobs, a narrow row has to
+be thrown out of a table it would not have widened.
+
+Applies to both match arm and `let` binding alignment. A run that breaks the limit is split into
+smaller tables rather than abandoned.
+
+- **Default value**: 0
+- **Possible values**: any non-negative integer
+- **Stable**: No
+
+With `let_align_threshold = 20` and no stretch limit, one long binding drags the rest:
+
+```rust
+#![rustfmt::skip]
+
+fn main() {
+    let lorem_ipsum_dolor_sit_amet = 1;
+    let sit                        = 2;
+    let amet                       = 3;
+}
+```
+
+With `align_stretch_threshold = 10` it is left out of the table instead:
+
+```rust
+#![rustfmt::skip]
+
+fn main() {
+    let lorem_ipsum_dolor_sit_amet = 1;
+    let sit  = 2;
+    let amet = 3;
+}
+```
+
 ## `array_width`
 
 Maximum width of an array literal before falling back to vertical formatting.

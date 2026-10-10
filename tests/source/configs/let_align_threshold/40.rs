@@ -1,4 +1,5 @@
 // rustfmt-let_align_threshold: 40
+// rustfmt-align_stretch_threshold: 10
 
 fn basic() {
     let spec = FloatSpec::from_args(&args)?;
@@ -117,4 +118,10 @@ fn two_annotations_do_reserve_one() {
     let mut clear_stack: bool = false;
     let mut target_idx: Option<StackIdx> = None;
     let blame = args.span();
+}
+
+fn a_wide_binding_may_not_stretch_the_table_for_the_rest() {
+    let lorem_ipsum_dolor_sit_amet = 1;
+    let sit = 2;
+    let amet = 3;
 }

@@ -2,10 +2,11 @@
 
 This is a slop fork of [rustfmt](https://github.com/rust-lang/rustfmt).
 
-The only difference is that three new features have been added:
+The only difference is that four new features have been added:
 * vertical alignment for match blocks
 * vertical alignment for consecutive let statements
 * option for vertically aligning the colons on field structs
+* a knob for how much whitespace you're willing to put up with to get a table
 
 ### why?
 
@@ -73,3 +74,49 @@ struct FloatSpec {
 ```
 
 Makes it more tabular imo. Configured using `struct_field_align_threshold = <n>` with `align_before_colon = true`.
+
+### How much padding is too much
+
+Both of the alignment features above ask the same question before forming a table: is this worth
+the whitespace? That turns out to be two questions, so there are two numbers.
+
+A *narrow* row joining a wide table only lengthens its own run of spaces. Nobody else pays, so this
+one is loose, and it's what `match_arm_align_threshold` and `let_align_threshold` cap.
+
+A *wide* row is different. It drags the column right for every other row in the table, so it should
+be on a much shorter leash.
+
+This can now be configured with `align_stretch_threshold` (default 0).
+
+Without it, one long binding ruins the whole block:
+
+```rust
+let lorem_ipsum_dolor_sit_amet = 1;
+let consectetur                = 2;
+let adipiscing                 = 3;
+let elit_sed                   = 4;
+```
+
+With `align_stretch_threshold = 10`, the long one is left out and the rest still get their table:
+
+```rust
+let lorem_ipsum_dolor_sit_amet = 1;
+let consectetur = 2;
+let adipiscing  = 3;
+let elit_sed    = 4;
+```
+
+This is also why a run that can't align as a whole gets split into smaller tables instead of being
+given up on.
+
+Here are the numbers I fell on for [shed](https://github.com/km-clay/shed)'s formatting:
+
+```toml
+struct_field_align_threshold = 8
+enum_discrim_align_threshold = 8
+align_before_colon           = true
+
+match_arm_align_threshold = 14
+let_align_threshold       = 14
+align_stretch_threshold   = 10
+```
