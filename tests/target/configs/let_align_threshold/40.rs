@@ -1,5 +1,5 @@
-// rustfmt-let_align_threshold: 40
-// rustfmt-align_stretch_threshold: 10
+//@ rustfmt-let_align_threshold: 40
+//@ rustfmt-align_stretch_threshold: 10
 
 fn basic() {
     let     spec   = FloatSpec::from_args(&args)?;

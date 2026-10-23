@@ -1,4 +1,4 @@
-// rustfmt-match_arm_align_threshold: 40
+//@ rustfmt-match_arm_align_threshold: 40
 
 fn basic(x: Tok) -> u32 {
     match x {

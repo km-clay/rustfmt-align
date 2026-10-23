@@ -1,7 +1,7 @@
-// rustfmt-align_before_colon: true
-// rustfmt-struct_field_align_threshold: 40
-// rustfmt-enum_discrim_align_threshold: 40
-// rustfmt-let_align_threshold: 40
+//@ rustfmt-align_before_colon: true
+//@ rustfmt-struct_field_align_threshold: 40
+//@ rustfmt-enum_discrim_align_threshold: 40
+//@ rustfmt-let_align_threshold: 40
 
 #[derive(Debug, Clone, Copy)]
 struct FloatSpec {
